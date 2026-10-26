@@ -31,8 +31,7 @@ MainWindow::MainWindow(AppConfig config) : poller_(config.refresh_interval) {
 
     scrolled_.set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
     scrolled_.set_vexpand(true);
-    list_.set_selection_mode(Gtk::SelectionMode::NONE);
-    scrolled_.set_child(list_);
+    scrolled_.set_child(group_container_);
     root_.append(scrolled_);
 
     status_.set_halign(Gtk::Align::START);
@@ -48,7 +47,7 @@ MainWindow::MainWindow(AppConfig config) : poller_(config.refresh_interval) {
         },
         false);
 
-    poller_.signal_results().connect(sigc::mem_fun(*this, &MainWindow::on_results));
+    poller_.signal_results().connect([this] { on_results(); });
     poller_.start();
 }
 
@@ -77,86 +76,64 @@ void MainWindow::on_results() {
 }
 
 void MainWindow::update_sensors(const std::vector<TemperatureReading>& sensors) {
-    std::vector<std::string> ids;
-    ids.reserve(sensors.size());
-    for (const auto& sensor : sensors) {
-        ids.push_back(sensor.id);
+    while (auto* child = group_container_.get_first_child()) {
+        group_container_.remove(*child);
     }
-
-    if (!shown_ids_ || *shown_ids_ != ids) {
-        rebuild_rows(sensors);
-        shown_ids_ = std::move(ids);
-        return;
-    }
-
-    for (const auto& sensor : sensors) {
-        const auto iterator = rows_.find(sensor.id);
-        if (iterator == rows_.end()) {
-            continue;
-        }
-
-        auto& widgets = iterator->second;
-        widgets.name->set_text(sensor.label);
-        widgets.source->set_text(sensor.source);
-        widgets.value->set_markup(value_markup(sensor.celsius));
-    }
-}
-
-void MainWindow::rebuild_rows(const std::vector<TemperatureReading>& sensors) {
-    clear_rows();
 
     if (sensors.empty()) {
-        auto* row = Gtk::make_managed<Gtk::ListBoxRow>();
+        auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
+        row->set_margin_top(8);
+        row->set_margin_bottom(8);
+        row->set_margin_start(12);
+        row->set_margin_end(12);
+
         auto* label = Gtk::make_managed<Gtk::Label>();
         label->set_text(strings::no_sensors);
-        label->set_margin_top(24);
-        label->set_margin_bottom(24);
-        row->set_child(*label);
-        list_.append(*row);
+        label->set_halign(Gtk::Align::START);
+        row->append(*label);
+        group_container_.append(*row);
         return;
     }
 
+    std::map<std::string, std::vector<TemperatureReading>> groups;
     for (const auto& sensor : sensors) {
-        auto* row = Gtk::make_managed<Gtk::ListBoxRow>();
-        auto* content = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
-        content->set_margin_top(8);
-        content->set_margin_bottom(8);
-        content->set_margin_start(12);
-        content->set_margin_end(12);
-
-        auto* text = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
-        text->set_hexpand(true);
-
-        auto* name = Gtk::make_managed<Gtk::Label>();
-        name->set_halign(Gtk::Align::START);
-        name->set_text(sensor.label);
-
-        auto* source = Gtk::make_managed<Gtk::Label>();
-        source->set_halign(Gtk::Align::START);
-        source->set_text(sensor.source);
-        source->set_opacity(0.65);
-
-        auto* value = Gtk::make_managed<Gtk::Label>();
-        value->set_halign(Gtk::Align::END);
-        value->set_valign(Gtk::Align::CENTER);
-        value->set_markup(value_markup(sensor.celsius));
-
-        text->append(*name);
-        text->append(*source);
-        content->append(*text);
-        content->append(*value);
-        row->set_child(*content);
-        list_.append(*row);
-
-        rows_.emplace(sensor.id, RowWidgets{.name = name, .source = source, .value = value});
+        groups[sensor.source].push_back(sensor);
     }
-}
 
-void MainWindow::clear_rows() {
-    while (auto* child = list_.get_first_child()) {
-        list_.remove(*child);
+    for (auto& [type, readings] : groups) {
+        auto* group_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+        group_box->set_margin_top(6);
+        group_box->set_margin_bottom(6);
+        group_box->set_margin_start(12);
+        group_box->set_margin_end(12);
+
+        auto* header = Gtk::make_managed<Gtk::Label>();
+        header->set_markup("<b>" + Glib::Markup::escape_text(type) + "</b>");
+        header->set_halign(Gtk::Align::START);
+        group_box->append(*header);
+
+        for (const auto& sensor : readings) {
+            auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
+            row->set_margin_top(4);
+            row->set_margin_bottom(4);
+
+            auto* name = Gtk::make_managed<Gtk::Label>();
+            name->set_halign(Gtk::Align::START);
+            name->set_hexpand(true);
+            name->set_text(sensor.label);
+
+            auto* value = Gtk::make_managed<Gtk::Label>();
+            value->set_halign(Gtk::Align::END);
+            value->set_valign(Gtk::Align::CENTER);
+            value->set_markup(value_markup(sensor.celsius));
+
+            row->append(*name);
+            row->append(*value);
+            group_box->append(*row);
+        }
+
+        group_container_.append(*group_box);
     }
-    rows_.clear();
 }
 
 void MainWindow::set_status(const std::string& text) {
